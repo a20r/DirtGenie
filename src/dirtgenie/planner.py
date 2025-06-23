@@ -1040,6 +1040,10 @@ def revise_trip_plan_with_feedback(
     global openai_client
     if openai_client is None and OPENAI_API_KEY:
         openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    
+    # Check if OpenAI client is available
+    if openai_client is None:
+        return "Error revising trip plan: OpenAI API key not available. Please provide a valid OpenAI API key."
 
     # Format the route information
     route_info = format_route_info(directions)
@@ -1134,6 +1138,47 @@ Please revise the trip plan based on the user's feedback while maintaining the s
         error_msg = f"❌ Error revising trip plan: {e}"
         print(error_msg)
         return f"Error revising trip plan: {e}"
+
+
+def revise_trip_plan_with_feedback_with_keys(
+    original_plan: str,
+    feedback: str,
+    start: str,
+    end: str,
+    nights: int,
+    preferences: Dict[str, Any],
+    itinerary: Dict[str, Any],
+    directions: Dict[str, Any],
+    departure_date: Optional[str] = None,
+    openai_key: Optional[str] = None,
+) -> str:
+    """
+    Revise an existing trip plan based on user feedback with user-provided OpenAI API key.
+    """
+    original_openai_client = globals().get("openai_client")
+
+    try:
+        if openai_key:
+            global openai_client
+            openai_client = OpenAI(api_key=openai_key)
+
+        return revise_trip_plan_with_feedback(
+            original_plan=original_plan,
+            feedback=feedback,
+            start=start,
+            end=end,
+            nights=nights,
+            preferences=preferences,
+            itinerary=itinerary,
+            directions=directions,
+            departure_date=departure_date,
+        )
+    finally:
+        # Restore original client
+        if original_openai_client is not None:
+            openai_client = original_openai_client
+        else:
+            openai_client = None
 
 
 def main():

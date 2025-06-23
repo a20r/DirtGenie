@@ -21,7 +21,7 @@ from dirtgenie.planner import (create_default_profile, create_geojson, create_ge
                                generate_trip_plan_with_keys, get_bicycle_directions, get_multi_waypoint_directions,
                                get_multi_waypoint_directions_with_keys, initialize_clients, load_profile,
                                plan_tour_itinerary, plan_tour_itinerary_with_keys, revise_trip_plan_with_feedback,
-                               save_profile)
+                               revise_trip_plan_with_feedback_with_keys, save_profile)
 
 app = FastAPI(
     title="DirtGenie API",
@@ -246,30 +246,49 @@ async def plan_trip(
 
 
 @app.post("/api/revise-trip", response_model=TripPlanResponse)
-async def revise_trip(request: TripRevisionRequest):
+async def revise_trip(
+    request: TripRevisionRequest,
+    x_openai_key: Optional[str] = Header(None),
+    x_google_maps_key: Optional[str] = Header(None)
+):
     """Revise a trip plan based on user feedback"""
     try:
+        # Get API keys from headers (for user-supplied keys) or environment (for development)
+        openai_key = x_openai_key or os.getenv("OPENAI_API_KEY")
+        google_maps_key = x_google_maps_key or os.getenv("GOOGLE_MAPS_API_KEY")
+        
+        if not openai_key or not google_maps_key:
+            raise HTTPException(
+                status_code=400, 
+                detail="Missing API keys. Please provide OpenAI and Google Maps API keys."
+            )
+
         # Convert preferences to dict format
         preferences = request.trip_request.preferences.dict()
 
         # For this demo, we'll need to re-plan since we don't have the original data
         # In production, you'd store and retrieve the original itinerary and directions
 
-        # Re-plan the itinerary first
-        itinerary = plan_tour_itinerary(
+        # Re-plan the itinerary first (with API keys)
+        itinerary = plan_tour_itinerary_with_keys(
             start=request.trip_request.start_location,
             end=request.trip_request.end_location,
             nights=request.trip_request.nights,
             preferences=preferences,
             desires=request.trip_request.desires,
-            departure_date=request.trip_request.departure_date
+            departure_date=request.trip_request.departure_date,
+            openai_key=openai_key,
+            google_maps_key=google_maps_key
         )
 
-        # Get route directions
-        directions = get_multi_waypoint_directions(itinerary)
+        # Get route directions (with API keys)
+        directions = get_multi_waypoint_directions_with_keys(
+            itinerary, 
+            google_maps_key=google_maps_key
+        )
 
-        # Generate revised trip plan
-        revised_plan = revise_trip_plan_with_feedback(
+        # Generate revised trip plan (with API keys)
+        revised_plan = revise_trip_plan_with_feedback_with_keys(
             original_plan=request.original_plan,
             feedback=request.feedback,
             start=request.trip_request.start_location,
@@ -278,17 +297,19 @@ async def revise_trip(request: TripRevisionRequest):
             preferences=preferences,
             itinerary=itinerary,
             directions=directions,
-            departure_date=request.trip_request.departure_date
+            departure_date=request.trip_request.departure_date,
+            openai_key=openai_key
         )
 
-        # Create updated GeoJSON
-        geojson_data = create_geojson(
+        # Create updated GeoJSON (with API keys)
+        geojson_data = create_geojson_with_keys(
             start=request.trip_request.start_location,
             end=request.trip_request.end_location,
             directions=directions,
             preferences=preferences,
             trip_plan=revised_plan,
-            itinerary=itinerary
+            itinerary=itinerary,
+            google_maps_key=google_maps_key
         )
 
         # Calculate total distance
