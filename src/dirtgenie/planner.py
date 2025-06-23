@@ -8,8 +8,8 @@ with route information from Google Maps.
 
 import argparse
 import json
-import re
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1422,7 +1422,7 @@ def create_geojson(
                     except Exception as e:
                         print(f"Warning: Could not geocode {end_location}: {e}")
                 if coords is None:
-                    coords = [0, 0]
+                    continue
 
                 waypoint_feature = {
                     "type": "Feature",
