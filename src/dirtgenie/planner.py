@@ -718,7 +718,7 @@ IMPORTANT: Use web search to find:
                 },
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=4000,
+            max_tokens=6000,
             temperature=0.7,
         )
 
@@ -1002,7 +1002,7 @@ Please create a comprehensive trip plan following the example format above. Incl
                 },
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=4000,
+            max_tokens=8000,
             temperature=0.7,
         )
 
@@ -1040,7 +1040,7 @@ def revise_trip_plan_with_feedback(
     global openai_client
     if openai_client is None and OPENAI_API_KEY:
         openai_client = OpenAI(api_key=OPENAI_API_KEY)
-    
+
     # Check if OpenAI client is available
     if openai_client is None:
         return "Error revising trip plan: OpenAI API key not available. Please provide a valid OpenAI API key."
@@ -1119,7 +1119,7 @@ Please revise the trip plan based on the user's feedback while maintaining the s
                 },
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=4000,
+            max_tokens=8000,
             temperature=0.7,
         )
 
