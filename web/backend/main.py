@@ -26,7 +26,7 @@ from dirtgenie.planner import (create_default_profile, create_geojson, create_ge
 app = FastAPI(
     title="DirtGenie API",
     description="AI-Powered Bikepacking Trip Planner API",
-    version="1.0.0"
+    version="1.1.0"
 )
 
 # Enable CORS for frontend
@@ -112,7 +112,7 @@ async def startup_event():
 @app.get("/")
 async def root():
     """Root endpoint"""
-    return {"message": "DirtGenie API is running", "version": "1.0.0"}
+    return {"message": "DirtGenie API is running", "version": "1.1.0"}
 
 
 @app.get("/health")
