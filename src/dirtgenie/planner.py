@@ -12,7 +12,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import googlemaps
 import polyline  # For decoding Google Maps polylines
@@ -103,7 +103,7 @@ def web_search_function(query: str, max_results: int = 5) -> Dict[str, Any]:
 
 def search_weather_info(query: str) -> Dict[str, Any]:
     """
-    Search for weather information using weather APIs.
+    Search for weather information using OpenWeatherMap API and Google Places API.
 
     Args:
         query: Weather-related search query
@@ -123,27 +123,68 @@ def search_weather_info(query: str) -> Dict[str, Any]:
             # Fallback: use entire query minus "weather"
             location = query.lower().replace('weather', '').strip()
 
+        results = []
+
         # Try OpenWeatherMap API if available (requires API key)
         weather_api_key = os.getenv('OPENWEATHER_API_KEY')
         if weather_api_key:
-            weather_url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={weather_api_key}&units=metric"
-            response = requests.get(weather_url, timeout=10)
+            try:
+                weather_url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={weather_api_key}&units=metric"
+                response = requests.get(weather_url, timeout=10)
 
-            if response.status_code == 200:
-                data = response.json()
-                return {
-                    'query': query,
-                    'results': [{
-                        'title': f"Current Weather in {data['name']}",
-                        'snippet': f"Temperature: {data['main']['temp']}°C, {data['weather'][0]['description'].title()}. Humidity: {data['main']['humidity']}%, Wind: {data['wind']['speed']} m/s",
+                if response.status_code == 200:
+                    data = response.json()
+
+                    # Get 5-day forecast as well
+                    forecast_url = f"http://api.openweathermap.org/data/2.5/forecast?q={location}&appid={weather_api_key}&units=metric"
+                    forecast_response = requests.get(forecast_url, timeout=10)
+                    forecast_data = forecast_response.json() if forecast_response.status_code == 200 else None
+
+                    weather_info = {
+                        'title': f"Current Weather in {data['name']}, {data['sys']['country']}",
+                        'snippet': f"Temperature: {data['main']['temp']}°C, {data['weather'][0]['description'].title()}. Humidity: {data['main']['humidity']}%, Wind: {data['wind']['speed']} m/s. Feels like: {data['main']['feels_like']}°C",
                         'type': 'weather_current',
-                        'data': data
-                    }],
-                    'status': 'success'
-                }
+                        'data': {
+                            'current': data,
+                            'forecast': forecast_data
+                        },
+                        'coordinates': {
+                            'lat': data['coord']['lat'],
+                            'lng': data['coord']['lon']
+                        }
+                    }
 
-        # Fallback to general web search for weather
-        return web_search_general(f"current weather forecast {location}")
+                    if forecast_data:
+                        weather_info['snippet'] += f". 5-day forecast available with {len(forecast_data['list'])} data points."
+
+                    results.append(weather_info)
+            except Exception as e:
+                print(f"OpenWeatherMap API error: {e}")
+
+        # If we have Google Maps API, try to get more detailed location info
+        global gmaps
+        if gmaps and results:
+            try:
+                # Use places_nearby or text_search instead of places
+                geocode_result = gmaps.geocode(location)
+                if geocode_result:
+                    results[0]['place_details'] = {
+                        'formatted_address': geocode_result[0].get('formatted_address'),
+                        'place_id': geocode_result[0].get('place_id'),
+                        'geometry': geocode_result[0].get('geometry')
+                    }
+            except Exception as e:
+                print(f"Google Geocoding API error: {e}")
+
+        if not results:
+            # Fallback to general web search for weather
+            return web_search_general(f"current weather forecast {location}")
+
+        return {
+            'query': query,
+            'results': results,
+            'status': 'success'
+        }
 
     except Exception as e:
         return {
@@ -994,11 +1035,11 @@ IMPORTANT: Use web search to find:
 """
 
     try:
-        # Initial message without tools to see if the model needs to search
+        # Simplified approach without tool calling for now to fix truncation issue
         messages = [
             {
                 "role": "system",
-                "content": "You are an expert bikepacking tour planner with access to current web information through search tools. CRITICAL: You must respond with ONLY valid JSON exactly as requested - no additional text, no markdown, no explanations outside the JSON. Be extremely detailed within the JSON structure. IMPORTANT: Use your web search tools to find current information about: 1) Specific accommodations (campgrounds, hotels, hostels) with availability, pricing, and booking details, 2) Current weather forecasts for the planned travel dates and locations, 3) Trail conditions and any closures, 4) Local attractions and their current operating status. Search for real, specific places and current information. Include MANY waypoints and detailed descriptions for each day. When planning closed-loop tours, ensure the route forms a loop back to the start.",
+                "content": "You are an expert bikepacking tour planner. CRITICAL: You must respond with ONLY valid JSON exactly as requested - no additional text, no markdown, no explanations outside the JSON. Be extremely detailed within the JSON structure. Include ALL requested days in the itinerary - if {nights} nights are requested, provide exactly {nights + 1} days. When planning closed-loop tours, ensure the route forms a loop back to the start.",
             },
             {"role": "user", "content": prompt},
         ]
@@ -1006,56 +1047,9 @@ IMPORTANT: Use web search to find:
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            tools=WEB_SEARCH_TOOLS,
-            tool_choice="auto",
             max_tokens=6000,
             temperature=0.7,
         )
-
-        # Handle tool calls for information gathering
-        while response.choices[0].message.tool_calls:
-            tool_calls = response.choices[0].message.tool_calls
-
-            # Add the assistant's response with tool calls to the messages
-            messages.append({
-                "role": "assistant",
-                "content": response.choices[0].message.content,
-                "tool_calls": [
-                    {
-                        "id": tool_call.id,
-                        "type": "function",
-                        "function": {
-                            "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments
-                        }
-                    } for tool_call in tool_calls
-                ]
-            })
-
-            # Execute each tool call
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                function_args = json.loads(tool_call.function.arguments)
-
-                print(f"🔍 Planning - searching for: {function_args.get('query', 'information')}")
-
-                function_result = handle_tool_call(function_name, function_args)
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(function_result)
-                })
-
-            # Get next response
-            response = openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                tools=WEB_SEARCH_TOOLS,
-                tool_choice="auto",
-                max_tokens=6000,
-                temperature=0.7,
-            )
 
         content = response.choices[0].message.content
         if not content:
@@ -1079,26 +1073,43 @@ IMPORTANT: Use web search to find:
 
     except Exception as e:
         print(f"Error planning itinerary: {e}")
-        # Fallback to simple 2-stop itinerary
+        # Improved fallback to create all requested days
+        itinerary_days = {}
+        distance_per_day = 80  # Default distance per day
+
+        # Create each day with proper progression
+        for day_num in range(1, nights + 2):  # +2 because range is exclusive and we need nights+1 days
+            day_key = f"day_{day_num}"
+
+            if day_num == 1:
+                start_loc = start
+                if nights == 0:  # Same day trip
+                    end_loc = end
+                    overnight_loc = "Arrive at destination"
+                else:
+                    end_loc = f"Day {day_num} waypoint between {start} and {end}"
+                    overnight_loc = "Local camping area or accommodation"
+            elif day_num == nights + 1:  # Final day
+                start_loc = f"Day {day_num - 1} waypoint"
+                end_loc = end
+                overnight_loc = "Arrive at destination"
+            else:  # Intermediate days
+                start_loc = f"Day {day_num - 1} waypoint"
+                end_loc = f"Day {day_num} waypoint between {start} and {end}"
+                overnight_loc = "Local camping area or accommodation"
+
+            itinerary_days[day_key] = {
+                "start_location": start_loc,
+                "end_location": end_loc,
+                "overnight_location": overnight_loc,
+                "highlights": ["Scenic route", "Local attractions"],
+                "estimated_distance_km": distance_per_day,
+            }
+
         return {
-            "itinerary": {
-                "day_1": {
-                    "start_location": start,
-                    "end_location": f"Midpoint between {start} and {end}",
-                    "overnight_location": "Local camping area",
-                    "highlights": ["Scenic route", "Local attractions"],
-                    "estimated_distance_km": 80,
-                },
-                f"day_{nights + 1}": {
-                    "start_location": f"Midpoint between {start} and {end}",
-                    "end_location": end,
-                    "overnight_location": "Arrive at destination",
-                    "highlights": ["Final stretch", "Destination arrival"],
-                    "estimated_distance_km": 80,
-                },
-            },
-            "total_estimated_distance": 160,
-            "route_summary": f"Simple route from {start} to {end}",
+            "itinerary": itinerary_days,
+            "total_estimated_distance": distance_per_day * (nights + 1),
+            "route_summary": f"Route from {start} to {end} over {nights + 1} days",
         }
 
 
@@ -1323,12 +1334,12 @@ ITINERARY STOPS:
 
 {closed_loop_text}
 Please create a comprehensive trip plan following the example format above. Include practical details like specific accommodation options, food stops, water sources, and safety considerations. Make it engaging and informative."""
-    # Make API call to OpenAI with tool calling for web search
+    # Make API call to OpenAI - simplified without tool calling for now
     try:
         messages = [
             {
                 "role": "system",
-                "content": "You are an expert bikepacking trip planner with extensive knowledge of cycling routes, accommodations, and outdoor safety. You have access to web search tools to find current, up-to-date information about weather, accommodations, trail conditions, and local services. Use these tools to provide accurate, current information in your trip plans.",
+                "content": "You are an expert bikepacking trip planner with extensive knowledge of cycling routes, accommodations, and outdoor safety. Create comprehensive, detailed trip plans with specific recommendations.",
             },
             {"role": "user", "content": prompt},
         ]
@@ -1336,58 +1347,9 @@ Please create a comprehensive trip plan following the example format above. Incl
         response = openai_client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            tools=WEB_SEARCH_TOOLS,
-            tool_choice="auto",  # Let the model decide when to use tools
             max_tokens=8000,
             temperature=0.7,
         )
-
-        # Handle tool calls if the model wants to search for information
-        while response.choices[0].message.tool_calls:
-            tool_calls = response.choices[0].message.tool_calls
-
-            # Add the assistant's response with tool calls to the messages
-            messages.append({
-                "role": "assistant",
-                "content": response.choices[0].message.content,
-                "tool_calls": [
-                    {
-                        "id": tool_call.id,
-                        "type": "function",
-                        "function": {
-                            "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments
-                        }
-                    } for tool_call in tool_calls
-                ]
-            })
-
-            # Execute each tool call and add results
-            for tool_call in tool_calls:
-                function_name = tool_call.function.name
-                function_args = json.loads(tool_call.function.arguments)
-
-                print(f"🔍 Searching for: {function_args.get('query', 'information')}")
-
-                # Call the function and get results
-                function_result = handle_tool_call(function_name, function_args)
-
-                # Add the function result to messages
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(function_result)
-                })
-
-            # Get the next response from the model
-            response = openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                tools=WEB_SEARCH_TOOLS,
-                tool_choice="auto",
-                max_tokens=8000,
-                temperature=0.7,
-            )
 
         # Extract the final trip plan
         trip_plan = response.choices[0].message.content
@@ -1507,7 +1469,7 @@ Please revise the trip plan based on the user's feedback while maintaining the s
         if hasattr(response, "choices"):
             revised_plan = response.choices[0].message.content
         else:
-            revised_plan = response["choices"][0]["message"]["content"]
+            revised_plan = "Error: Unable to access response content"
         if revised_plan:
             revised_plan = revised_plan.strip()
         else:
