@@ -16,8 +16,293 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import googlemaps
 import polyline  # For decoding Google Maps polylines
+import requests
 import yaml  # For loading profile configurations
 from openai import OpenAI
+
+
+# Define web search functions for OpenAI function calling
+def web_search_function(query: str, max_results: int = 5) -> Dict[str, Any]:
+    """
+    Perform a web search using a search API or service.
+    This function will be called by OpenAI when it needs current web information.
+
+    Args:
+        query: Search query string
+        max_results: Maximum number of results to return
+
+    Returns:
+        Dictionary containing search results
+    """
+    try:
+        # Use DuckDuckGo Instant Answer API as a free option
+        # Alternatively, you can integrate with Google Search API, Bing API, or SerpApi
+
+        # For weather searches, try specific weather APIs
+        if "weather" in query.lower():
+            return search_weather_info(query)
+
+        # For accommodation searches, focus on booking sites
+        if any(word in query.lower() for word in ["hotel", "accommodation", "camping", "lodge", "inn"]):
+            return search_accommodation_info(query)
+
+        # General web search using requests to fetch web content
+        search_url = f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1&skip_disambig=1"
+
+        headers = {
+            'User-Agent': 'DirtGenie-Bikepacking-Planner/1.0'
+        }
+
+        response = requests.get(search_url, headers=headers, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+
+            results = []
+
+            # Extract instant answer if available
+            if data.get('AbstractText'):
+                results.append({
+                    'title': data.get('AbstractSource', 'General Information'),
+                    'snippet': data.get('AbstractText'),
+                    'url': data.get('AbstractURL', ''),
+                    'type': 'instant_answer'
+                })
+
+            # Extract related topics
+            for topic in data.get('RelatedTopics', [])[:max_results]:
+                if isinstance(topic, dict) and 'Text' in topic:
+                    results.append({
+                        'title': topic.get('FirstURL', '').split('/')[-1].replace('_', ' '),
+                        'snippet': topic.get('Text', ''),
+                        'url': topic.get('FirstURL', ''),
+                        'type': 'related_topic'
+                    })
+
+            return {
+                'query': query,
+                'results': results[:max_results],
+                'status': 'success'
+            }
+        else:
+            return {
+                'query': query,
+                'results': [],
+                'status': 'error',
+                'error': f'HTTP {response.status_code}'
+            }
+
+    except Exception as e:
+        return {
+            'query': query,
+            'results': [],
+            'status': 'error',
+            'error': str(e)
+        }
+
+
+def search_weather_info(query: str) -> Dict[str, Any]:
+    """
+    Search for weather information using weather APIs.
+
+    Args:
+        query: Weather-related search query
+
+    Returns:
+        Dictionary containing weather information
+    """
+    try:
+        # Extract location from query
+        import re
+
+        # Simple location extraction - can be improved
+        location_match = re.search(r'weather (?:in |for )?(.+?)(?:\s+(?:today|tomorrow|this week)|$)', query.lower())
+        if location_match:
+            location = location_match.group(1).strip()
+        else:
+            # Fallback: use entire query minus "weather"
+            location = query.lower().replace('weather', '').strip()
+
+        # Try OpenWeatherMap API if available (requires API key)
+        weather_api_key = os.getenv('OPENWEATHER_API_KEY')
+        if weather_api_key:
+            weather_url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={weather_api_key}&units=metric"
+            response = requests.get(weather_url, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    'query': query,
+                    'results': [{
+                        'title': f"Current Weather in {data['name']}",
+                        'snippet': f"Temperature: {data['main']['temp']}°C, {data['weather'][0]['description'].title()}. Humidity: {data['main']['humidity']}%, Wind: {data['wind']['speed']} m/s",
+                        'type': 'weather_current',
+                        'data': data
+                    }],
+                    'status': 'success'
+                }
+
+        # Fallback to general web search for weather
+        return web_search_general(f"current weather forecast {location}")
+
+    except Exception as e:
+        return {
+            'query': query,
+            'results': [],
+            'status': 'error',
+            'error': str(e)
+        }
+
+
+def search_accommodation_info(query: str) -> Dict[str, Any]:
+    """
+    Search for accommodation information.
+
+    Args:
+        query: Accommodation-related search query
+
+    Returns:
+        Dictionary containing accommodation information
+    """
+    try:
+        # For accommodation searches, we'll use general web search but with targeted queries
+        accommodation_keywords = ["booking.com", "airbnb", "hotels.com", "campground", "RV park"]
+        enhanced_query = f"{query} {' OR '.join(accommodation_keywords)}"
+
+        return web_search_general(enhanced_query)
+
+    except Exception as e:
+        return {
+            'query': query,
+            'results': [],
+            'status': 'error',
+            'error': str(e)
+        }
+
+
+def web_search_general(query: str, max_results: int = 5) -> Dict[str, Any]:
+    """
+    General web search fallback function.
+
+    Args:
+        query: Search query
+        max_results: Maximum results to return
+
+    Returns:
+        Dictionary containing search results
+    """
+    try:
+        # Use a simple approach - in production, you'd want to use proper search APIs
+        # This is a placeholder that simulates web search results
+
+        return {
+            'query': query,
+            'results': [{
+                'title': f"Search results for: {query}",
+                'snippet': "Current information would be retrieved from web search. Please verify specific details directly with providers.",
+                'url': "https://example.com",
+                'type': 'general_search'
+            }],
+            'status': 'limited',
+            'note': 'Using fallback search. For production use, integrate with proper search APIs.'
+        }
+
+    except Exception as e:
+        return {
+            'query': query,
+            'results': [],
+            'status': 'error',
+            'error': str(e)
+        }
+
+
+# Define OpenAI function schemas for web search
+WEB_SEARCH_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search_function",
+            "description": "Search the web for current information about weather, accommodations, trail conditions, local services, and other real-time data needed for trip planning",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query - be specific about what information you need (e.g., 'weather forecast San Francisco June 2025', 'bike shops Portland Oregon', 'campgrounds Yellowstone National Park booking')"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of search results to return (default: 5)",
+                        "default": 5
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_weather_info",
+            "description": "Search for detailed weather forecasts and conditions for specific locations and dates",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Weather search query including location and timeframe (e.g., 'weather Seattle Washington next week', 'forecast Portland Oregon July 2025')"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_accommodation_info",
+            "description": "Search for accommodations including hotels, camping, B&Bs with current availability and pricing",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Accommodation search query with location and preferences (e.g., 'hotels Santa Barbara California budget', 'campgrounds Yosemite reservations', 'bike-friendly accommodations Bend Oregon')"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
+
+
+# Function to handle OpenAI tool calls
+def handle_tool_call(function_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Handle function calls from OpenAI for web search functionality.
+
+    Args:
+        function_name: Name of the function to call
+        arguments: Arguments passed to the function
+
+    Returns:
+        Result of the function call
+    """
+    if function_name == "web_search_function":
+        return web_search_function(
+            query=arguments.get("query", ""),
+            max_results=arguments.get("max_results", 5)
+        )
+    elif function_name == "search_weather_info":
+        return search_weather_info(query=arguments.get("query", ""))
+    elif function_name == "search_accommodation_info":
+        return search_accommodation_info(query=arguments.get("query", ""))
+    else:
+        return {
+            "status": "error",
+            "error": f"Unknown function: {function_name}"
+        }
 
 
 # Load environment variables from .env file if it exists
@@ -561,7 +846,7 @@ Return the plan in this exact JSON format:
         "day_2": {{
             "start_location": "Previous end location",
             "end_location": "Next waypoint continuing around the loop (not further from start)",
-            "overnight_location": "Specific accommodation name or camping area", 
+            "overnight_location": "Specific accommodation name or camping area",
             "highlights": ["attraction 1", "attraction 2"],
             "estimated_distance_km": {daily_distance.split('-')[1] if '-' in daily_distance else daily_distance[:2]},
             "distance_from_start_km": "Straight-line distance from {start}",
@@ -634,7 +919,7 @@ PLANNING REQUIREMENTS:
 ROUTE SURFACE AND TIRE COMPATIBILITY:
 Based on tire size "{preferences.get('tire_size', '700x35c (Gravel - Standard)')}" and terrain preference "{preferences.get('terrain', 'mixed')}":
 - If tire size contains "23", "25", or "28mm": Prioritize paved roads, light gravel paths, and well-maintained bike paths
-- If tire size contains "32", "35", "40mm" or "650b": Good for mixed terrain - paved roads, gravel paths, and light trails  
+- If tire size contains "32", "35", "40mm" or "650b": Good for mixed terrain - paved roads, gravel paths, and light trails
 - If tire size contains "2.1", "2.25", "2.35", or "2.8": Can handle mountain bike trails, singletrack, and rougher terrain
 - Always match route surface recommendations to tire capabilities for safety and comfort
 
@@ -647,7 +932,7 @@ Return the plan in this exact JSON format with EXTENSIVE DETAIL:
             "end_location": "Specific Town/City Name",
             "waypoints": [
                 "Waypoint 1 name (15km) - Description and services",
-                "Waypoint 2 name (35km) - Description and services", 
+                "Waypoint 2 name (35km) - Description and services",
                 "Waypoint 3 name (55km) - Description and services"
             ],
             "overnight_location": "Specific accommodation name with contact info",
@@ -709,23 +994,70 @@ IMPORTANT: Use web search to find:
 """
 
     try:
+        # Initial message without tools to see if the model needs to search
+        messages = [
+            {
+                "role": "system",
+                "content": "You are an expert bikepacking tour planner with access to current web information through search tools. CRITICAL: You must respond with ONLY valid JSON exactly as requested - no additional text, no markdown, no explanations outside the JSON. Be extremely detailed within the JSON structure. IMPORTANT: Use your web search tools to find current information about: 1) Specific accommodations (campgrounds, hotels, hostels) with availability, pricing, and booking details, 2) Current weather forecasts for the planned travel dates and locations, 3) Trail conditions and any closures, 4) Local attractions and their current operating status. Search for real, specific places and current information. Include MANY waypoints and detailed descriptions for each day. When planning closed-loop tours, ensure the route forms a loop back to the start.",
+            },
+            {"role": "user", "content": prompt},
+        ]
+
         response = openai_client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert bikepacking tour planner with access to current web information. CRITICAL: You must respond with ONLY valid JSON exactly as requested - no additional text, no markdown, no explanations outside the JSON. Be extremely detailed within the JSON structure. IMPORTANT: Use your web search capabilities to find current information about: 1) Specific accommodations (campgrounds, hotels, hostels) with availability, pricing, and booking details, 2) Current weather forecasts for the planned travel dates and locations, 3) Trail conditions and any closures, 4) Local attractions and their current operating status. Search for real, specific places and current information. Include MANY waypoints and detailed descriptions for each day. When planning closed-loop tours, ensure the route forms a loop back to the start.",
-                },
-                {"role": "user", "content": prompt},
-            ],
+            messages=messages,
+            tools=WEB_SEARCH_TOOLS,
+            tool_choice="auto",
             max_tokens=6000,
             temperature=0.7,
         )
 
-        if hasattr(response, "choices"):
-            content = response.choices[0].message.content
-        else:
-            content = response["choices"][0]["message"]["content"]
+        # Handle tool calls for information gathering
+        while response.choices[0].message.tool_calls:
+            tool_calls = response.choices[0].message.tool_calls
+
+            # Add the assistant's response with tool calls to the messages
+            messages.append({
+                "role": "assistant",
+                "content": response.choices[0].message.content,
+                "tool_calls": [
+                    {
+                        "id": tool_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments
+                        }
+                    } for tool_call in tool_calls
+                ]
+            })
+
+            # Execute each tool call
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
+
+                print(f"🔍 Planning - searching for: {function_args.get('query', 'information')}")
+
+                function_result = handle_tool_call(function_name, function_args)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(function_result)
+                })
+
+            # Get next response
+            response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                tools=WEB_SEARCH_TOOLS,
+                tool_choice="auto",
+                max_tokens=6000,
+                temperature=0.7,
+            )
+
+        content = response.choices[0].message.content
         if not content:
             raise ValueError("Empty response from OpenAI")
 
@@ -991,25 +1323,74 @@ ITINERARY STOPS:
 
 {closed_loop_text}
 Please create a comprehensive trip plan following the example format above. Include practical details like specific accommodation options, food stops, water sources, and safety considerations. Make it engaging and informative."""
-    # Make API call to OpenAI
+    # Make API call to OpenAI with tool calling for web search
     try:
+        messages = [
+            {
+                "role": "system",
+                "content": "You are an expert bikepacking trip planner with extensive knowledge of cycling routes, accommodations, and outdoor safety. You have access to web search tools to find current, up-to-date information about weather, accommodations, trail conditions, and local services. Use these tools to provide accurate, current information in your trip plans.",
+            },
+            {"role": "user", "content": prompt},
+        ]
+
         response = openai_client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert bikepacking trip planner with extensive knowledge of cycling routes, accommodations, and outdoor safety.",
-                },
-                {"role": "user", "content": prompt},
-            ],
+            messages=messages,
+            tools=WEB_SEARCH_TOOLS,
+            tool_choice="auto",  # Let the model decide when to use tools
             max_tokens=8000,
             temperature=0.7,
         )
 
-        if hasattr(response, "choices"):
-            trip_plan = response.choices[0].message.content
-        else:
-            trip_plan = response["choices"][0]["message"]["content"]
+        # Handle tool calls if the model wants to search for information
+        while response.choices[0].message.tool_calls:
+            tool_calls = response.choices[0].message.tool_calls
+
+            # Add the assistant's response with tool calls to the messages
+            messages.append({
+                "role": "assistant",
+                "content": response.choices[0].message.content,
+                "tool_calls": [
+                    {
+                        "id": tool_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments
+                        }
+                    } for tool_call in tool_calls
+                ]
+            })
+
+            # Execute each tool call and add results
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
+
+                print(f"🔍 Searching for: {function_args.get('query', 'information')}")
+
+                # Call the function and get results
+                function_result = handle_tool_call(function_name, function_args)
+
+                # Add the function result to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(function_result)
+                })
+
+            # Get the next response from the model
+            response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                tools=WEB_SEARCH_TOOLS,
+                tool_choice="auto",
+                max_tokens=8000,
+                temperature=0.7,
+            )
+
+        # Extract the final trip plan
+        trip_plan = response.choices[0].message.content
         if trip_plan:
             trip_plan = trip_plan.strip()
         else:
