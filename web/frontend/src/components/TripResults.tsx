@@ -203,8 +203,16 @@ ${cleanContent}
             {/* Interactive Route Map */}
             {response.geojson && (
                 <div className="bg-white rounded-lg shadow-lg p-6">
-                    <h3 className="text-xl font-bold text-gray-900 mb-4">🗺️ Route Map</h3>
-                    <RouteMap geojson={response.geojson} />
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-xl font-bold text-gray-900">🗺️ Interactive Route Map</h3>
+                        <div className="text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+                            Click points for details • Scroll to zoom • Drag to pan
+                        </div>
+                    </div>
+                    <RouteMap
+                        geojson={response.geojson}
+                        key={JSON.stringify(response.geojson)}
+                    />
                 </div>
             )}
         </div>

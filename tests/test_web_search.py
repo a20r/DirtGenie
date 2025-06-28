@@ -3,13 +3,13 @@
 Test script to verify web search functionality in the bikepacking planner.
 """
 
+from dirtgenie.planner import generate_trip_plan, initialize_clients, plan_tour_itinerary
 import os
 import sys
 from pathlib import Path
 
 # Add the src directory to the path so we can import our module
 sys.path.append(str(Path(__file__).parent.parent / "src"))
-from dirtgenie.planner import generate_trip_plan, initialize_clients, plan_tour_itinerary
 
 # Add the current directory to the path so we can import our module
 sys.path.append(str(Path(__file__).parent))
@@ -45,21 +45,24 @@ def test_web_search_in_planning():
         itinerary = plan_tour_itinerary(start, end, nights, preferences)
 
         print("✅ Tour planning completed successfully!")
-        print(f"Planned {len(itinerary.get('waypoints', []))} waypoints")
-        print(f"Overnight locations: {len(itinerary.get('overnight_locations', []))}")
 
-        # Print some key details to verify the response
-        if 'waypoints' in itinerary:
-            print("\nPlanned waypoints:")
-            for i, waypoint in enumerate(itinerary['waypoints']):
-                print(f"  {i+1}. {waypoint.get('name', 'Unknown')}")
+        # Check the actual itinerary structure
+        if 'itinerary' in itinerary:
+            itinerary_days = itinerary['itinerary']
+            print(f"Planned {len(itinerary_days)} days")
+            print(f"Total estimated distance: {itinerary.get('total_estimated_distance', 'Unknown')} km")
 
-        if 'overnight_locations' in itinerary:
-            print("\nOvernight locations:")
-            for i, location in enumerate(itinerary['overnight_locations']):
-                print(f"  Night {i+1}: {location.get('name', 'Unknown')}")
-                if 'accommodation_details' in location:
-                    print(f"    Accommodation: {location['accommodation_details']}")
+            # Print day-by-day details
+            print("\nPlanned itinerary:")
+            for day_key, day_info in itinerary_days.items():
+                start_loc = day_info.get('start_location', 'Unknown')
+                end_loc = day_info.get('end_location', 'Unknown')
+                overnight = day_info.get('overnight_location', 'Unknown')
+                distance = day_info.get('estimated_distance_km', 'Unknown')
+                print(f"  {day_key}: {start_loc} → {end_loc} ({distance}km)")
+                print(f"    Overnight: {overnight}")
+        else:
+            print("⚠️  No itinerary structure found in response")
 
         return True
 
@@ -74,31 +77,62 @@ def test_web_search_in_trip_generation():
 
     # Create a mock itinerary and directions for testing
     mock_itinerary = {
-        "waypoints": [
-            {"name": "Boston MA", "lat": 42.3601, "lng": -71.0589},
-            {"name": "Portsmouth NH", "lat": 43.0718, "lng": -70.7626},
-            {"name": "Portland ME", "lat": 43.6591, "lng": -70.2568}
-        ],
-        "overnight_locations": [
-            {
-                "name": "Portsmouth NH",
-                "lat": 43.0718,
-                "lng": -70.7626,
-                "accommodation_details": "Camping at Prescott Park area"
+        "itinerary": {
+            "day_1": {
+                "start_location": "Boston MA",
+                "end_location": "Portsmouth NH",
+                "overnight_location": "Prescott Park area camping",
+                "highlights": ["Historic Seaport", "Strawbery Banke Museum"],
+                "estimated_distance_km": 95
             },
-            {
-                "name": "Freeport ME",
-                "lat": 43.8570,
-                "lng": -70.1028,
-                "accommodation_details": "Wolfe's Neck Woods State Park camping"
+            "day_2": {
+                "start_location": "Portsmouth NH",
+                "end_location": "Freeport ME",
+                "overnight_location": "Wolfe's Neck Woods State Park",
+                "highlights": ["L.L.Bean Flagship Store", "Coastal views"],
+                "estimated_distance_km": 75
+            },
+            "day_3": {
+                "start_location": "Freeport ME",
+                "end_location": "Portland ME",
+                "overnight_location": "Arrive at destination",
+                "highlights": ["Old Port District", "Portland Head Light"],
+                "estimated_distance_km": 60
             }
-        ]
+        },
+        "total_estimated_distance": 230,
+        "route_summary": "Coastal route from Boston to Portland"
     }
 
     mock_directions = {
         "legs": [
-            {"distance": {"value": 95000}, "duration": {"value": 18000}},  # 95km, 5 hours
-            {"distance": {"value": 75000}, "duration": {"value": 14400}}   # 75km, 4 hours
+            {
+                "distance": {"value": 95000, "text": "95 km"},
+                "duration": {"value": 18000, "text": "5 hours"},
+                "start_address": "Boston, MA",
+                "end_address": "Portsmouth, NH",
+                "start_location": {"lat": 42.3601, "lng": -71.0589},
+                "end_location": {"lat": 43.0718, "lng": -70.7626},
+                "steps": []
+            },
+            {
+                "distance": {"value": 75000, "text": "75 km"},
+                "duration": {"value": 14400, "text": "4 hours"},
+                "start_address": "Portsmouth, NH",
+                "end_address": "Freeport, ME",
+                "start_location": {"lat": 43.0718, "lng": -70.7626},
+                "end_location": {"lat": 43.8570, "lng": -70.1028},
+                "steps": []
+            },
+            {
+                "distance": {"value": 60000, "text": "60 km"},
+                "duration": {"value": 12000, "text": "3.3 hours"},
+                "start_address": "Freeport, ME",
+                "end_address": "Portland, ME",
+                "start_location": {"lat": 43.8570, "lng": -70.1028},
+                "end_location": {"lat": 43.6591, "lng": -70.2568},
+                "steps": []
+            }
         ]
     }
 
@@ -118,7 +152,7 @@ def test_web_search_in_trip_generation():
         trip_plan = generate_trip_plan(
             "Boston MA",
             "Portland ME",
-            2,
+            3,  # 3 nights to match the mock itinerary
             preferences,
             mock_itinerary,
             mock_directions
