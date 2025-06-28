@@ -12,7 +12,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import googlemaps
 import polyline  # For decoding Google Maps polylines
@@ -1035,21 +1035,84 @@ IMPORTANT: Use web search to find:
 """
 
     try:
-        # Simplified approach without tool calling for now to fix truncation issue
+        # Re-enable web search with proper typing
+        if openai_client is None:
+            raise ValueError("OpenAI client not initialized")
+
         messages = [
             {
                 "role": "system",
-                "content": "You are an expert bikepacking tour planner. CRITICAL: You must respond with ONLY valid JSON exactly as requested - no additional text, no markdown, no explanations outside the JSON. Be extremely detailed within the JSON structure. Include ALL requested days in the itinerary - if {nights} nights are requested, provide exactly {nights + 1} days. When planning closed-loop tours, ensure the route forms a loop back to the start.",
+                "content": "You are an expert bikepacking tour planner with access to web search tools. CRITICAL: You must respond with ONLY valid JSON exactly as requested - no additional text, no markdown, no explanations outside the JSON. Be extremely detailed within the JSON structure. Include ALL requested days in the itinerary - if {nights} nights are requested, provide exactly {nights + 1} days. When planning closed-loop tours, ensure the route forms a loop back to the start. Use your web search tools to find current information about accommodations, weather, and trail conditions.",
             },
             {"role": "user", "content": prompt},
         ]
 
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            max_tokens=6000,
+            model="gpt-4.1",
+            messages=cast(Any, messages),  # Type: ignore for dynamic message construction
+            tools=cast(Any, WEB_SEARCH_TOOLS),  # Type: ignore for dynamic tool definitions
+            tool_choice="auto",
+            max_tokens=8000,
             temperature=0.7,
         )
+
+        # Handle tool calls if the model wants to search for information
+        max_iterations = 3  # Prevent infinite loops
+        iteration = 0
+
+        while response.choices[0].message.tool_calls and iteration < max_iterations:
+            iteration += 1
+            tool_calls = response.choices[0].message.tool_calls
+
+            # Add the assistant's response with tool calls to the messages
+            assistant_message = {
+                "role": "assistant",
+                "content": response.choices[0].message.content or "",
+            }
+
+            if tool_calls:
+                assistant_message["tool_calls"] = [
+                    {
+                        "id": tool_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments
+                        }
+                    } for tool_call in tool_calls
+                ]
+
+            messages.append(assistant_message)
+
+            # Execute each tool call and add results
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                try:
+                    function_args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    function_args = {"query": "invalid arguments"}
+
+                print(f"🔍 Planning - searching for: {function_args.get('query', 'information')}")
+
+                # Call the function and get results
+                function_result = handle_tool_call(function_name, function_args)
+
+                # Add the function result to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(function_result)
+                })
+
+            # Get next response
+            response = openai_client.chat.completions.create(
+                model="gpt-4.1",
+                messages=cast(Any, messages),  # Type: ignore for dynamic message construction
+                tools=cast(Any, WEB_SEARCH_TOOLS),  # Type: ignore for dynamic tool definitions
+                tool_choice="auto",
+                max_tokens=6000,
+                temperature=0.7,
+            )
 
         content = response.choices[0].message.content
         if not content:
@@ -1334,22 +1397,85 @@ ITINERARY STOPS:
 
 {closed_loop_text}
 Please create a comprehensive trip plan following the example format above. Include practical details like specific accommodation options, food stops, water sources, and safety considerations. Make it engaging and informative."""
-    # Make API call to OpenAI - simplified without tool calling for now
+    # Make API call to OpenAI with web search capabilities
     try:
+        if openai_client is None:
+            raise ValueError("OpenAI client not initialized")
+
         messages = [
             {
                 "role": "system",
-                "content": "You are an expert bikepacking trip planner with extensive knowledge of cycling routes, accommodations, and outdoor safety. Create comprehensive, detailed trip plans with specific recommendations.",
+                "content": "You are an expert bikepacking trip planner with extensive knowledge of cycling routes, accommodations, and outdoor safety. You have access to web search tools to find current, up-to-date information about weather, accommodations, trail conditions, and local services. Use these tools to provide accurate, current information in your trip plans. Create comprehensive, detailed trip plans with specific recommendations.",
             },
             {"role": "user", "content": prompt},
         ]
 
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
+            model="gpt-4.1",
+            messages=cast(Any, messages),  # Type: ignore for dynamic message construction
+            tools=cast(Any, WEB_SEARCH_TOOLS),  # Type: ignore for dynamic tool definitions
+            tool_choice="auto",
             max_tokens=8000,
             temperature=0.7,
         )
+
+        # Handle tool calls if the model wants to search for information
+        max_iterations = 3  # Prevent infinite loops
+        iteration = 0
+
+        while response.choices[0].message.tool_calls and iteration < max_iterations:
+            iteration += 1
+            tool_calls = response.choices[0].message.tool_calls
+
+            # Add the assistant's response with tool calls to the messages
+            assistant_message = {
+                "role": "assistant",
+                "content": response.choices[0].message.content or "",
+            }
+
+            if tool_calls:
+                assistant_message["tool_calls"] = [
+                    {
+                        "id": tool_call.id,
+                        "type": "function",
+                        "function": {
+                            "name": tool_call.function.name,
+                            "arguments": tool_call.function.arguments
+                        }
+                    } for tool_call in tool_calls
+                ]
+
+            messages.append(assistant_message)
+
+            # Execute each tool call and add results
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                try:
+                    function_args = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError:
+                    function_args = {"query": "invalid arguments"}
+
+                print(f"🔍 Trip planning - searching for: {function_args.get('query', 'information')}")
+
+                # Call the function and get results
+                function_result = handle_tool_call(function_name, function_args)
+
+                # Add the function result to messages
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(function_result)
+                })
+
+            # Get next response
+            response = openai_client.chat.completions.create(
+                model="gpt-4.1",
+                messages=cast(Any, messages),  # Type: ignore for dynamic message construction
+                tools=cast(Any, WEB_SEARCH_TOOLS),  # Type: ignore for dynamic tool definitions
+                tool_choice="auto",
+                max_tokens=8000,
+                temperature=0.7,
+            )
 
         # Extract the final trip plan
         trip_plan = response.choices[0].message.content
@@ -1454,7 +1580,7 @@ Please revise the trip plan based on the user's feedback while maintaining the s
 
     try:
         response = openai_client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4.1",
             messages=[
                 {
                     "role": "system",
